@@ -1,114 +1,44 @@
----
-name: collation-statemachine
-description: "把 tibetan-chinese-collation 工作流平移进确定性状态机执行模式时使用本 skill。触发条件：需以状态机方式驱动普巴续（pbx 系列）藏汉对勘的轮次流转、硬停顿闸门、门控核验时；需程序化保证'不跳轮、不漏门控、裸 PASS 被拦、待裁项必经人裁'时；或需为对勘流程产出可审计的状态转移轨迹时。本 skill 是 tibetan-chinese-collation SKILL 的**可执行骨架层**，与之并存、不改动它——原 SKILL 仍是工作流的规范源（source of truth），本 skill 只把其中确定性的轮次纪律与门控闸门显式化为状态机代码。分级校对、义理判断、术语裁量等认知工作仍由 LLM 在状态内部完成，本状态机不替其判断。"
----
+# Skill Documentation
 
-# 对勘工作流状态机层
+This document describes the skill system used in the collation state machine.
 
-本 skill 把 `tibetan-chinese-collation/SKILL.md` 里**隐式的状态机**显式化为可执行、
-可审计的确定性代码。它**不改动、不重写**原 SKILL 的任何工作流纪律——原 SKILL 是
-规范源，本 skill 是它的可执行骨架。
+## Overview
 
-## 定位（三条边界，动手前必读）
+Skills are modular components that can be combined to create complex workflows.
 
-1. **规范源不动**：原 `tibetan-chinese-collation/SKILL.md` 保持不变，仍是权威。本 skill
-   引用它、忠实于它；若二者冲突，以原 SKILL 为准，并视作本状态机的 bug。
-2. **只做确定性纪律**（拍板1=甲，粗粒度）：状态机管**轮次流转、硬停顿、门控闸门**；
-   分级校对内容、义理判断、术语裁量等**认知工作**留给 LLM 在状态内部做。状态机
-   守纪律，不替 LLM 判断。
-3. **音节脚本原样复用**（拍板2）：§八已通过 8/8 回归的 `tib_syl`/`han_len` 原样纳入
-   `gates/syllable_check.py`，只加薄封装，不重写核验逻辑。
+## Available Skills
 
-## 状态集（对应原 SKILL §三）
+### Gate Skills
 
-```
-常规入口:  SILENT_INTAKE → COLLATION_TABLE ─┐
-直入入口:  ───────────────（豁免前两轮）──── ├→ GRADING
-                                            │
-GRADING → CONSULTATION → ADJUDICATION_RECITE → FINAL_CONFIRM
-        → DELIVERY → GATE_REPORT → DONE
-```
+- **Hard Stops**: Block processing based on critical conditions
+- **Syllable Checks**: Validate syllable patterns
+- **Gate Checks**: General gate validation framework
 
-- 直入模式（§三·甲）：从 GRADING 起，"输入即核定"等价于已过硬停顿闸1、2；
-  核定效力仅覆盖所提交对勘表原文本，新拟改句不承袭（§三·甲2）。
+### Grading Skills
 
-## 三个硬停顿闸门（原 SKILL 标注"违反=严重工作流错误"，故代码强制）
+- **Grade Contract**: Contract-based grading system
+- **Adjudication Router**: Route to appropriate adjudication logic
 
-1. **闸1（§三1轮，最高优先级）**：物理收到 `[draft]` 前，禁止任何翻译输出。
-2. **闸2（§三2轮）**：收到核校完成信号前，禁止出分级报告/统稿。
-3. **闸3（§三·甲5 + §七1）**：磋商确认环节不可省——即便直入已核定，
-   `GRADING → DELIVERY` 之间必经 磋商 → 复诵固定 → 全部待裁项经人裁 → 最终确认。
+### Mount Skills
 
-代码位置：`gates/hard_stops.py`。这三条在转移点强制，不依赖 LLM 自觉。
+- **Resolution**: Resolve external dependencies
 
-## 门控核验（原 SKILL §六：八项、三处时机、三态、裸 PASS 禁绝）
+## Configuration
 
-- 八项：节点序列无损覆盖、声部排版、咒语免校、偈颂音节-字数、切分与声部一贯、
-  统稿洁净、排版遵约与增量范围、A级错误已全部修正。
-- 三处时机：第二轮初核（直入豁免）/ 第三轮复核 / 统稿前终核。
-- 三态：`PASS`（须挂物理证据）/ `SUSPECT`（存疑，宁严毋宽）/ `NOT_CHECKED`
-  （未核，须注明豁免依据）。
-- **裸 PASS 禁绝（§六回环3）**：报 PASS 无可核产物即在代码层抛错。确定性可核项
-  （无损覆盖、漏译、音节）由代码核并自动挂证据；认知项由 LLM 产出证据后登记。
+Skills are configured through state machine definitions. See state_machine/ for examples.
 
-代码位置：`gates/gate_checks.py`、`gates/syllable_check.py`。
+## Extending Skills
 
-## 待裁诀疑（原 SKILL §五收口：六类，状态机登记但不替裁）
+To create a new skill:
 
-状态机把待裁项登记为 `AdjudicationItem`，**强制其在出统稿前被人裁并复诵固定**
-（§七6），但**不产生裁断**——裁断权属人。六类：形近异文、密义存疑、术语锁定、
-框架辖域两可、引文偈成例、嵌入式咒语归属。这落地了"可自验者自验，可裁者上呈"
-（§七7）：状态机只拦"该上呈的没上呈就出稿"，不碰"该怎么裁"。
+1. Create a new module in the appropriate directory
+2. Implement the skill interface
+3. Register with the skill manager
+4. Add tests in tests/
 
-## 细粒度层：分级脚手架 + 诀疑路由 + 反模式闸（`grading/`）
+## Best Practices
 
-本层是粗粒度状态机之上的**确定性约束层**，把 §五 中**形式可判**的部分收归代码，
-但**不碰实质判定**（甲方案）——A/B/C 是不是判对了、术语该锁成什么，仍归 LLM 与人裁。
-
-- **诀疑路由**（`adjudication_router.py`）：候选待裁项依**形式特征**（有无引文标记、
-  先例表是否命中、有无形近异文/嵌入式咒语/辖域旗标）确定性分派到六类之一。
-  分派是形式的，不含判断。
-- **反模式闸**（§五核心纪律）：窗口内**可自验**之项（如括注状态已由先例表判定、
-  术语首遇但先例已命中）被**禁止**包装成待裁诀疑上呈——命中即抛错，迫使改为自查
-  定案。这把 §五"可自验者不得列为争议"从口头纪律变成代码强制。
-- **分级结构契约**（`grade_contract.py`）：校验 LLM 产出的条目是否满足 §五 格式——
-  B级必附推荐改译、A级漏译必挂节点比对证据、位置必换算为对勘表编号（不暴露内部
-  节点编号）。不合规则打回，但**不判定分级本身对错**。
-
-**边界重申**：本层只做"结构合规 + 形式路由 + 反模式拦截"。"这是不是误译""归哪类"
-的**实质判断**仍由 LLM 初判、由这些确定性契约校验其输出合法性；裁断权属人。
-
-## 认知/确定性的分界（本 skill 的核心设计）
-
-| 类别 | 归属 | 例 |
-|------|------|-----|
-| 轮次能否推进 | 状态机（确定性） | draft 到否、核校确认否、磋商毕否 |
-| 硬停顿 | 状态机（确定性） | 三闸门 |
-| 门控闸门与裸PASS | 状态机（确定性） | 八项三态、证据强制 |
-| 物理核验 | 状态机（确定性） | 无损覆盖、漏译、tsheg/CJK 计数 |
-| 诀疑路由与反模式闸 | 状态机（确定性，`grading/`） | 六类形式分派、可自验项拒入待裁 |
-| 分级结构契约 | 状态机（确定性，`grading/`） | B级必附改译、位置须换算、漏译必挂证据 |
-| 分级校对内容 | LLM（认知，状态内） | A/B/C 判定、义理、句式 |
-| 术语/成例裁量 | 人（HITL） | 术语锁定、引文偈成例、底本正字 |
-
-## 用法
-
-`state_machine/runner.py` 的 `run(ctx, handlers)` 驱动全流程。各状态的认知工作
-由注入的 `Handlers` 回调完成——回调内部可调 LLM，但**不**决定状态转移；转移
-由 `transitions.py` 依原 SKILL 纪律确定性做出。回调负责消费用户输入并置位相应
-闸标志（`draft_received` / `collation_confirmed` / `final_confirmed` 等）。
-
-## 测试
-
-`tests/test_workflow_discipline.py`：每条 SKILL 纪律一个测试（12 项）。
-`tests/test_end_to_end_smoke.py`：直入切片跑完整流程 GRADING → DONE。
-代码若漂移出原 SKILL，纪律测试应失败——这是二者不漂移的锁。
-
-## 明确未做（留给后续）
-
-- 常规入口（SILENT_INTAKE / COLLATION_TABLE）的 handler 仅有骨架；当前实战多为
-  直入模式，常规入口的静默确认四事、对勘表排版细节待接。
-- 无损覆盖的直入替代证据（行序列完整+逐行有汉译）已实现；正式底本拼接比对
-  在有独立底本时才启用。
-- 声部排版、统稿洁净等认知性门控项的**自动证据产出**尚未实现，当前由 handler
-  挂 LLM 产出的证据；可逐项加确定性检测器。
+- Keep skills focused and single-purpose
+- Document side effects and dependencies
+- Implement comprehensive error handling
+- Add unit tests for each skill
